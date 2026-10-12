@@ -138,7 +138,26 @@
   ansible.builtin.command: launchctl bootout gui/{{ ansible_facts.user_uid }}/{{ launch_agent }}
   when: agent_file.changed and agent_status.rc == 0
 
-# needs the user to be logged in to the desktop; otherwise it starts at the next login
+# A user agent only runs while its user is logged in at the screen; otherwise
+# it starts at the user's next login
+- name: Check who is logged in at the screen
+  ansible.builtin.command: stat -f %Su /dev/console
+  register: console_user
+  changed_when: false
+  check_mode: false
+
+- name: Skip this Mac until the user is logged in
+  when: console_user.stdout != ansible_facts.user_id
+  block:
+    - name: Explain why this Mac is skipped
+      ansible.builtin.debug:
+        msg: >-
+          {{ ansible_facts.user_id }} isn't logged in at the screen ({{ console_user.stdout }} is),
+          so Syncthing starts at the next login. Run the playbook again then to finish.
+
+    - name: Stop here for this Mac
+      ansible.builtin.meta: end_host
+
 - name: Start the user agent
   ansible.builtin.command: >-
     launchctl bootstrap gui/{{ ansible_facts.user_uid }}
