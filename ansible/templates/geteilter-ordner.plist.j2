@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Managed by Ansible (geteilter-ordner). A Syncthing instance just for the
+     Geteilter Ordner, separate from any other Syncthing of the user. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{{ launch_agent }}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{ syncthing_dir }}/{{ syncthing_name }}/syncthing</string>
+        <string>serve</string>
+        <string>--no-browser</string>
+        <string>--no-upgrade</string>
+        <string>--home={{ client_home }}</string>
+        <string>--gui-address={{ client_gui_address }}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>StandardOutPath</key>
+    <string>{{ ansible_env.HOME }}/Library/Logs/geteilter-ordner.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{ ansible_env.HOME }}/Library/Logs/geteilter-ordner.log</string>
+</dict>
+</plist>

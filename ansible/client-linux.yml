@@ -1,0 +1,94 @@
+---
+# Linux part of clients.yml: Syncthing from the distribution, a systemd user
+# service, and the folder on the desktop with its icon set through GIO.
+
+- name: Install Syncthing
+  become: true
+  ansible.builtin.apt:
+    name: syncthing
+    state: present
+    update_cache: true
+  tags: [install]
+
+# keeps the user's services running after logging out and before logging in
+- name: Let the user's services run without a login
+  become: true
+  ansible.builtin.command: loginctl enable-linger {{ ansible_user }}
+  args:
+    creates: /var/lib/systemd/linger/{{ ansible_user }}
+  tags: [install]
+
+# the folder name depends on the language, e.g. "Desktop" or "Schreibtisch"
+- name: Find the desktop folder
+  ansible.builtin.command: xdg-user-dir DESKTOP
+  register: desktop_dir
+  changed_when: false
+  tags: [always]
+
+- name: Use a folder on the desktop
+  ansible.builtin.set_fact:
+    shared_dir: "{{ desktop_dir.stdout }}/{{ geteilter_ordner_label }}"
+  tags: [always]
+
+- name: Create the shared folder on the desktop
+  ansible.builtin.file:
+    path: "{{ shared_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Write the list of synced file types
+  ansible.builtin.template:
+    src: stignore.j2
+    dest: "{{ shared_dir }}/.stignore"
+    mode: "0644"
+
+- name: Create the Syncthing configuration and keys
+  ansible.builtin.command: syncthing generate --home={{ client_home }} --no-default-folder
+  args:
+    creates: "{{ client_home }}/config.xml"
+
+- name: Copy the folder icon
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../icon/folder-icon.png"
+    dest: "{{ client_home }}/folder-icon.png"
+    mode: "0644"
+  tags: [icon]
+
+# GNOME's file manager and desktop show this icon for the folder. It's
+# metadata of the file manager, so Syncthing doesn't sync it.
+- name: Check the folder icon
+  environment: "{{ user_environment | combine({'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/' ~ ansible_facts.user_uid ~ '/bus'}) }}"
+  ansible.builtin.command: gio info -a metadata::custom-icon "{{ shared_dir }}"
+  register: folder_icon
+  changed_when: false
+  tags: [icon]
+
+- name: Set the folder icon
+  environment: "{{ user_environment | combine({'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/' ~ ansible_facts.user_uid ~ '/bus'}) }}"
+  ansible.builtin.command: >-
+    gio set "{{ shared_dir }}"
+    metadata::custom-icon "file://{{ client_home }}/folder-icon.png"
+  when: ("file://" ~ client_home ~ "/folder-icon.png") not in folder_icon.stdout
+  tags: [icon]
+
+- name: Create the folder for user services
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/.config/systemd/user"
+    state: directory
+    mode: "0755"
+
+- name: Install the user service
+  ansible.builtin.template:
+    src: geteilter-ordner.service.j2
+    dest: "{{ ansible_env.HOME }}/.config/systemd/user/geteilter-ordner.service"
+    mode: "0644"
+  register: service_file
+
+- name: Start the user service
+  environment: "{{ user_environment }}"
+  ansible.builtin.systemd_service:
+    name: geteilter-ordner
+    scope: user
+    enabled: true
+    state: "{{ 'restarted' if service_file.changed else 'started' }}"
+    daemon_reload: "{{ service_file.changed }}"

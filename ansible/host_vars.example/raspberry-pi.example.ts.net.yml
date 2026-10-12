@@ -1,0 +1,20 @@
+---
+# Example: a Linux server, e.g. a Raspberry Pi, as the hub. Copy to
+# host_vars/<its name in the inventory>.yml.
+
+ansible_user: pi
+
+# the playbook copies docker-compose.yml and notifier/ here
+hub_compose_dir: /home/pi/geteilter-ordner
+hub_shared_dir: /home/pi/geteilter-ordner/{{ geteilter_ordner_label }}
+# optional: another tool's signal-cli login on the same machine, otherwise
+# signal/state. signal-cli locks the state while one of them uses it.
+# hub_signal_state_dir: /home/pi/other-tool/signal-state
+
+# Where the clients find this hub. Use its cable address with a fixed DHCP lease;
+# .local names may resolve wrongly on machines that run Docker.
+hub_addresses:
+  - tcp://192.168.1.10:22000
+  - quic://192.168.1.10:22000
+  - tcp://raspberry-pi.example.ts.net:22000
+  - quic://raspberry-pi.example.ts.net:22000

@@ -1,0 +1,13 @@
+# Managed by Ansible (geteilter-ordner). A Syncthing instance just for the
+# Geteilter Ordner, separate from any other Syncthing of the user.
+[Unit]
+Description=Geteilter Ordner (Syncthing)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/syncthing serve --no-browser --no-upgrade --home={{ client_home }} --gui-address={{ client_gui_address }}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,242 @@
+---
+# Starts and configures the hub: the central Syncthing instance in Docker, with the
+# notifier next to it. Works on the Menti's Mac and on a Linux server, see
+# host_vars/ for each host's paths and addresses. Run it again after changing
+# group_vars/all.yml or notifier/.
+#
+# Usage, in geteilter-ordner/: ansible-playbook -i ansible/inventory.ini ansible/hub.yml
+#
+# Prepare another host as the next hub, without starting anything there:
+#   ansible-playbook -i ansible/inventory.ini ansible/hub.yml -e hub_hosts=hub_next -e hub_prepare_only=true
+
+- name: Set up the Geteilter Ordner hub
+  hosts: "{{ hub_hosts | default('hub') }}"
+  vars:
+    compose_dir: "{{ hub_compose_dir }}"
+    shared_dir: "{{ hub_shared_dir }}"
+    folder_path: /var/syncthing/{{ geteilter_ordner_label }}
+    api_headers:
+      X-API-Key: "{{ api_key.stdout }}"
+
+  tasks:
+    - name: Create the hub's folder
+      ansible.builtin.file:
+        path: "{{ compose_dir }}"
+        state: directory
+        mode: "0755"
+
+    # on the Mac, docker-compose.yml is used right from the repository
+    - name: Copy the hub's files to the host
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../{{ item }}"
+        dest: "{{ compose_dir }}/"
+        mode: preserve
+      loop:
+        - docker-compose.yml
+        - notifier
+        - signal.example.json
+      when: inventory_hostname != 'localhost'
+
+    - name: Create the shared folder
+      ansible.builtin.file:
+        path: "{{ shared_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write the list of synced file types
+      ansible.builtin.template:
+        src: stignore.j2
+        dest: "{{ shared_dir }}/.stignore"
+        mode: "0644"
+
+    - name: Create the folder for the icon
+      when: ansible_facts.system == 'Darwin'
+      ansible.builtin.file:
+        path: "{{ lookup('env', 'HOME') }}/.local/share/geteilter-ordner"
+        state: directory
+        mode: "0755"
+
+    # a copy, so a changed icon is noticed and set again
+    - name: Copy the folder icon
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../icon/folder-icon.png"
+        dest: "{{ lookup('env', 'HOME') }}/.local/share/geteilter-ordner/folder-icon.png"
+        mode: "0644"
+      register: icon_file
+      when: ansible_facts.system == 'Darwin'
+
+    # Finder keeps a folder's icon in a hidden file "Icon\r" in the folder, which
+    # Syncthing ignores, since it's not one of the synced file types
+    - name: Check the folder icon
+      ansible.builtin.find:
+        paths: "{{ shared_dir }}"
+        # "?" matches the "\r" at the end of the file name
+        patterns: Icon?
+        hidden: true
+      register: icon_in_folder
+      when: ansible_facts.system == 'Darwin'
+
+    - name: Set the folder icon
+      ansible.builtin.command:
+        argv:
+          - osascript
+          - -l
+          - JavaScript
+          - -e
+          - >-
+            ObjC.import("AppKit");
+            var icon = $.NSImage.alloc.initWithContentsOfFile("{{ icon_file.dest }}");
+            $.NSWorkspace.sharedWorkspace.setIconForFileOptions(icon, "{{ shared_dir }}", 0)
+      when: ansible_facts.system == 'Darwin' and (icon_file.changed or icon_in_folder.matched == 0)
+
+    # signal.json and the linked Signal account for the notifier, see README.md
+    - name: Create the notifier's Signal folder
+      ansible.builtin.file:
+        path: "{{ compose_dir }}/signal"
+        state: directory
+        mode: "0700"
+
+    # docker compose reads .env next to docker-compose.yml, also when it's run by hand
+    - name: Write the paths for docker compose
+      ansible.builtin.copy:
+        dest: "{{ compose_dir }}/.env"
+        content: |
+          # Managed by Ansible (geteilter-ordner), see host_vars/
+          SHARED_DIR={{ shared_dir }}
+          {% if hub_signal_state_dir is defined %}
+          SIGNAL_STATE_DIR={{ hub_signal_state_dir }}
+          {% endif %}
+        mode: "0644"
+
+    - name: Prepare only, without starting the hub
+      when: hub_prepare_only | default(false) | bool
+      block:
+        - name: Download the hub's image
+          ansible.builtin.command: docker compose pull hub
+          args:
+            chdir: "{{ compose_dir }}"
+          changed_when: false
+
+        - name: Build the notifier's image
+          ansible.builtin.command: docker compose build notifier
+          args:
+            chdir: "{{ compose_dir }}"
+          changed_when: false
+
+        - name: Stop here
+          ansible.builtin.meta: end_host
+
+    # --build also rebuilds the notifier after changes to notifier/
+    - name: Start the hub and the notifier
+      ansible.builtin.command: docker compose up -d --build
+      args:
+        chdir: "{{ compose_dir }}"
+      register: compose_up
+      changed_when: >-
+        'Started' in compose_up.stderr or 'Created' in compose_up.stderr
+        or 'Recreated' in compose_up.stderr
+
+    - name: Read the hub's API key
+      ansible.builtin.command: >-
+        docker compose exec -T hub
+        sed -n 's:.*<apikey>\(.*\)</apikey>.*:\1:p' /var/syncthing/config/config.xml
+      args:
+        chdir: "{{ compose_dir }}"
+      register: api_key
+      until: api_key.stdout | length > 0
+      retries: 30
+      delay: 2
+      changed_when: false
+      no_log: true
+
+    - name: Wait for the API
+      ansible.builtin.uri:
+        url: "{{ geteilter_ordner_hub_api }}/rest/system/status"
+        headers: "{{ api_headers }}"
+      register: hub_status
+      until: hub_status.status == 200
+      retries: 30
+      delay: 2
+
+    # the hub only talks to the clients directly, over the local network or
+    # Tailscale, never through Syncthing's public servers
+    - name: Turn off public discovery, relays and reporting
+      ansible.builtin.uri:
+        url: "{{ geteilter_ordner_hub_api }}/rest/config/options"
+        method: PATCH
+        headers: "{{ api_headers }}"
+        body_format: json
+        body:
+          globalAnnounceEnabled: false
+          localAnnounceEnabled: false
+          relaysEnabled: false
+          natEnabled: false
+          urAccepted: -1
+          crashReportingEnabled: false
+          startBrowser: false
+
+    - name: Check for Syncthing's default folder
+      ansible.builtin.uri:
+        url: "{{ geteilter_ordner_hub_api }}/rest/config/folders/default"
+        headers: "{{ api_headers }}"
+        status_code: [200, 404]
+      register: default_folder
+
+    - name: Remove Syncthing's default folder
+      ansible.builtin.uri:
+        url: "{{ geteilter_ordner_hub_api }}/rest/config/folders/default"
+        method: DELETE
+        headers: "{{ api_headers }}"
+      when: default_folder.status == 200
+      changed_when: true
+
+    - name: Check for the shared folder in Syncthing
+      ansible.builtin.uri:
+        url: "{{ geteilter_ordner_hub_api }}/rest/config/folders/{{ geteilter_ordner_id }}"
+        headers: "{{ api_headers }}"
+        status_code: [200, 404]
+      register: shared_folder
+
+    - name: Add the shared folder
+      ansible.builtin.uri:
+        url: "{{ geteilter_ordner_hub_api }}/rest/config/folders/{{ geteilter_ordner_id }}"
+        method: PUT
+        headers: "{{ api_headers }}"
+        body_format: json
+        body:
+          id: "{{ geteilter_ordner_id }}"
+          label: "{{ geteilter_ordner_label }}"
+          path: "{{ folder_path }}"
+          type: sendreceive
+          devices:
+            - deviceID: "{{ hub_status.json.myID }}"
+      when: shared_folder.status == 404
+      changed_when: true
+
+    # PATCH keeps the folder's devices, which the clients' playbook adds.
+    # Docker Desktop doesn't pass changes on the Mac into the container
+    # reliably, so the hub also rescans every minute.
+    - name: Configure the shared folder
+      ansible.builtin.uri:
+        url: "{{ geteilter_ordner_hub_api }}/rest/config/folders/{{ geteilter_ordner_id }}"
+        method: PATCH
+        headers: "{{ api_headers }}"
+        body_format: json
+        # one expression, so the numbers stay numbers, which Syncthing requires.
+        # Old versions and deleted files go to .stversions in the shared folder.
+        body: >-
+          {{ {
+            'label': geteilter_ordner_label,
+            'fsWatcherEnabled': true,
+            'fsWatcherDelayS': geteilter_ordner_watch_delay | int,
+            'rescanIntervalS': 60,
+            'versioning': {
+              'type': 'staggered',
+              'params': {'maxAge': ((geteilter_ordner_keep_versions_days | int) * 86400) | string},
+              'cleanupIntervalS': 3600
+            }
+          } }}
+
+    - name: Show the hub's device ID
+      ansible.builtin.debug:
+        msg: "Hub device ID: {{ hub_status.json.myID }}"

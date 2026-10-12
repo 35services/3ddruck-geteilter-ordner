@@ -1,0 +1,6 @@
+// Managed by Ansible (geteilter-ordner). Only these file types are synced,
+// everything else is ignored. (?i) makes the patterns case-insensitive.
+{% for type in geteilter_ordner_file_types %}
+(?i)!*.{{ type }}
+{% endfor %}
+*

@@ -1,0 +1,25 @@
+---
+# Settings shared by the hub and the clients
+
+geteilter_ordner_id: geteilter-ordner
+geteilter_ordner_label: Geteilter Ordner
+
+# only files with these extensions are synced, case doesn't matter
+geteilter_ordner_file_types:
+  - 3mf
+  - stl
+  - txt
+  - svg
+
+# seconds between a change and sending it
+geteilter_ordner_watch_delay: 5
+
+# how long the hub keeps old versions and deleted files
+geteilter_ordner_keep_versions_days: 30
+
+# where the clients find the hub: hub_addresses of the machine in the inventory's
+# hub group, see host_vars/
+geteilter_ordner_hub_addresses: "{{ hostvars[groups['hub'][0]].hub_addresses }}"
+
+# the hub's API, only reachable on the hub machine
+geteilter_ordner_hub_api: http://127.0.0.1:8384

@@ -1,0 +1,50 @@
+# The central Syncthing instance ("hub") of the Geteilter Ordner. Every client only
+# knows the hub, so stopping it (docker compose down) stops all syncing.
+#
+# Set it up with: ansible-playbook -i ansible/inventory.ini ansible/hub.yml
+#
+# The web interface is only reachable on this machine: http://127.0.0.1:8384
+
+name: geteilter-ordner
+
+services:
+  hub:
+    image: syncthing/syncthing:2.1.6
+    container_name: geteilter-ordner-hub
+    hostname: geteilter-ordner-hub
+    restart: unless-stopped
+    volumes:
+      # keys and configuration in config/, kept out of the repository. The image
+      # expects its volume at /var/syncthing and fixes the permissions there.
+      - hub-data:/var/syncthing
+      # the shared folder on this machine, e.g. on the Menti's desktop
+      - ${SHARED_DIR:-${HOME}/Desktop/Geteilter Ordner}:/var/syncthing/Geteilter Ordner
+    ports:
+      # sync connections from the clients, TCP and QUIC
+      - "22000:22000/tcp"
+      - "22000:22000/udp"
+      - "127.0.0.1:8384:8384"
+
+  # sends a Signal message about changed files, see notifier/notifier.py
+  notifier:
+    build: notifier
+    image: geteilter-ordner-notifier
+    container_name: geteilter-ordner-notifier
+    restart: unless-stopped
+    depends_on:
+      - hub
+    environment:
+      SIGNAL_CONFIG: /signal/signal.json
+      SIGNAL_STATE: /signal/state
+    volumes:
+      # the hub's configuration, for its API key
+      - hub-data:/hub:ro
+      # signal.json and the linked Signal account in state/, kept out of the
+      # repository like the hub's keys. Copy signal.example.json to signal/signal.json.
+      - ./signal:/signal
+      # the linked account: signal/state, or an existing signal-cli folder set as
+      # SIGNAL_STATE_DIR in .env, e.g. ~/.local/share/signal-cli of a local signal-cli
+      - ${SIGNAL_STATE_DIR:-./signal/state}:/signal/state
+
+volumes:
+  hub-data:

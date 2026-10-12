@@ -1,0 +1,151 @@
+---
+# Installs the Geteilter Ordner on Linux and macOS clients: a Syncthing instance
+# just for it, running as a user service, with the folder on the desktop. Then
+# registers the client at the hub, so it syncs right away. Run the hub's playbook
+# first. The hub's API is only reachable on the hub itself, so those tasks run
+# there (delegate_to).
+#
+# Usage, in geteilter-ordner/:
+#   ansible-playbook -i ansible/inventory.ini ansible/clients.yml --ask-become-pass
+#
+# Without sudo, once Syncthing is installed, e.g. to update the configuration:
+#   ansible-playbook -i ansible/inventory.ini ansible/clients.yml --skip-tags install
+# Only update the folder icon:
+#   ansible-playbook -i ansible/inventory.ini ansible/clients.yml --tags icon
+
+- name: Install the Geteilter Ordner on the clients
+  hosts: clients
+  vars:
+    client_home: "{{ ansible_env.HOME }}/.local/state/geteilter-ordner"
+    # its own port, so it doesn't collide with another Syncthing (8384)
+    client_gui_address: 127.0.0.1:8385
+    client_api: http://{{ client_gui_address }}
+    client_api_headers:
+      X-API-Key: "{{ client_api_key.stdout }}"
+    hub_api_headers:
+      X-API-Key: "{{ hub_api_key.stdout }}"
+    user_environment:
+      XDG_RUNTIME_DIR: /run/user/{{ ansible_facts.user_uid }}
+    # macOS: Syncthing 2 needs macOS 12, the last version for macOS 11 is 1.30.0
+    syncthing_macos_version: "{{ 'v2.1.6' if ansible_facts.distribution_major_version | int >= 12 else 'v1.30.0' }}"
+
+  tasks:
+    # Linux or Darwin (macOS): installs and starts Syncthing, creates the folder
+    # and sets shared_dir to it
+    - name: Install Syncthing and create the folder
+      ansible.builtin.include_tasks: client-{{ ansible_facts.system | lower }}.yml
+      tags: [always]
+
+    - name: Read the client's API key
+      ansible.builtin.command: sed -n 's:.*<apikey>\(.*\)</apikey>.*:\1:p' {{ client_home }}/config.xml
+      register: client_api_key
+      changed_when: false
+      no_log: true
+
+    - name: Wait for the client's API
+      ansible.builtin.uri:
+        url: "{{ client_api }}/rest/system/status"
+        headers: "{{ client_api_headers }}"
+      register: client_status
+      until: client_status.status == 200
+      retries: 30
+      delay: 2
+
+    - name: Read the hub's API key
+      delegate_to: "{{ groups['hub'][0] }}"
+      run_once: true
+      ansible.builtin.command: >-
+        docker exec geteilter-ordner-hub
+        sed -n 's:.*<apikey>\(.*\)</apikey>.*:\1:p' /var/syncthing/config/config.xml
+      register: hub_api_key
+      changed_when: false
+      no_log: true
+
+    - name: Read the hub's device ID
+      delegate_to: "{{ groups['hub'][0] }}"
+      run_once: true
+      ansible.builtin.uri:
+        url: "{{ geteilter_ordner_hub_api }}/rest/system/status"
+        headers: "{{ hub_api_headers }}"
+      register: hub_status
+
+    # The client only dials the hub, over the local network or Tailscale. It
+    # doesn't listen for others, and doesn't use Syncthing's public servers.
+    - name: Configure the client
+      ansible.builtin.uri:
+        url: "{{ client_api }}/rest/config/options"
+        method: PATCH
+        headers: "{{ client_api_headers }}"
+        body_format: json
+        body:
+          listenAddresses: ["tcp://127.0.0.1:22001"]
+          globalAnnounceEnabled: false
+          localAnnounceEnabled: false
+          relaysEnabled: false
+          natEnabled: false
+          urAccepted: -1
+          crashReportingEnabled: false
+          startBrowser: false
+
+    - name: Add the hub to the client
+      ansible.builtin.uri:
+        url: "{{ client_api }}/rest/config/devices/{{ hub_status.json.myID }}"
+        method: PUT
+        headers: "{{ client_api_headers }}"
+        body_format: json
+        body:
+          deviceID: "{{ hub_status.json.myID }}"
+          name: Geteilter Ordner (Hub)
+          addresses: "{{ geteilter_ordner_hub_addresses }}"
+
+    # rescanIntervalS: the watcher drops the removal of a whole folder, since
+    # folders are ignored (only files of the synced types count), so a
+    # rescan every minute finds it
+    - name: Add the shared folder to the client
+      ansible.builtin.uri:
+        url: "{{ client_api }}/rest/config/folders/{{ geteilter_ordner_id }}"
+        method: PUT
+        headers: "{{ client_api_headers }}"
+        body_format: json
+        body: >-
+          {{ {
+            'id': geteilter_ordner_id,
+            'label': geteilter_ordner_label,
+            'path': shared_dir,
+            'type': 'sendreceive',
+            'fsWatcherEnabled': true,
+            'fsWatcherDelayS': geteilter_ordner_watch_delay | int,
+            'rescanIntervalS': 60,
+            'devices': [{'deviceID': client_status.json.myID}, {'deviceID': hub_status.json.myID}]
+          } }}
+
+    - name: Add the client to the hub
+      delegate_to: "{{ groups['hub'][0] }}"
+      ansible.builtin.uri:
+        url: "{{ geteilter_ordner_hub_api }}/rest/config/devices/{{ client_status.json.myID }}"
+        method: PUT
+        headers: "{{ hub_api_headers }}"
+        body_format: json
+        body:
+          deviceID: "{{ client_status.json.myID }}"
+          # e.g. stick-1 for stick-1.example.ts.net
+          name: "{{ geteilter_ordner_client_name | default(inventory_hostname_short) }}"
+          addresses: [dynamic]
+
+    - name: Read the hub's shared folder
+      delegate_to: "{{ groups['hub'][0] }}"
+      ansible.builtin.uri:
+        url: "{{ geteilter_ordner_hub_api }}/rest/config/folders/{{ geteilter_ordner_id }}"
+        headers: "{{ hub_api_headers }}"
+      register: hub_folder
+
+    - name: Share the folder with the client on the hub
+      delegate_to: "{{ groups['hub'][0] }}"
+      ansible.builtin.uri:
+        url: "{{ geteilter_ordner_hub_api }}/rest/config/folders/{{ geteilter_ordner_id }}"
+        method: PATCH
+        headers: "{{ hub_api_headers }}"
+        body_format: json
+        body: "{{ {'devices': hub_folder.json.devices + [{'deviceID': client_status.json.myID}]} }}"
+      when: client_status.json.myID not in (hub_folder.json.devices | map(attribute='deviceID'))
+      changed_when: true

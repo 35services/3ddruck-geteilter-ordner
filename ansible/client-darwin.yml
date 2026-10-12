@@ -1,0 +1,146 @@
+---
+# macOS part of clients.yml: Syncthing from its official release, just for the
+# user (no Homebrew, no admin rights), started by a launchd user agent, with the
+# folder on the desktop. macOS protects the desktop: when Syncthing first uses
+# it, macOS asks on the Mac whether "syncthing" may access the desktop folder,
+# which someone has to confirm.
+
+- name: Set the paths
+  ansible.builtin.set_fact:
+    shared_dir: "{{ ansible_env.HOME }}/Desktop/{{ geteilter_ordner_label }}"
+    # an earlier setup kept the folder here, with a link on the desktop
+    old_shared_dir: "{{ ansible_env.HOME }}/{{ geteilter_ordner_label }}"
+    syncthing_name: syncthing-macos-{{ 'arm64' if ansible_facts.architecture == 'arm64' else 'amd64' }}-{{ syncthing_macos_version }}
+    syncthing_dir: "{{ ansible_env.HOME }}/.local/opt"
+    launch_agent: de.kjg.geteilter-ordner
+  tags: [always]
+
+- name: Create the folder for Syncthing
+  ansible.builtin.file:
+    path: "{{ syncthing_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Download Syncthing {{ syncthing_macos_version }}
+  ansible.builtin.get_url:
+    url: https://github.com/syncthing/syncthing/releases/download/{{ syncthing_macos_version }}/{{ syncthing_name }}.zip
+    dest: "{{ syncthing_dir }}/{{ syncthing_name }}.zip"
+    mode: "0644"
+
+- name: Unpack Syncthing
+  ansible.builtin.unarchive:
+    src: "{{ syncthing_dir }}/{{ syncthing_name }}.zip"
+    dest: "{{ syncthing_dir }}"
+    remote_src: true
+    creates: "{{ syncthing_dir }}/{{ syncthing_name }}/syncthing"
+
+- name: Check for a link on the desktop from an earlier setup
+  ansible.builtin.stat:
+    path: "{{ shared_dir }}"
+  register: shared_dir_stat
+  tags: [always]
+
+- name: Move the folder from the home folder to the desktop
+  when: shared_dir_stat.stat.islnk | default(false)
+  tags: [always]
+  block:
+    - name: Stop Syncthing while the folder moves
+      ansible.builtin.command: launchctl bootout gui/{{ ansible_facts.user_uid }}/{{ launch_agent }}
+      failed_when: false
+
+    - name: Remove the link
+      ansible.builtin.file:
+        path: "{{ shared_dir }}"
+        state: absent
+
+    - name: Move the folder
+      ansible.builtin.command: mv "{{ old_shared_dir }}" "{{ shared_dir }}"
+      args:
+        creates: "{{ shared_dir }}"
+
+    # makes the start task below start Syncthing again
+    - name: Note that Syncthing is stopped
+      ansible.builtin.set_fact:
+        agent_stopped_for_move: true
+
+- name: Create the shared folder
+  ansible.builtin.file:
+    path: "{{ shared_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Write the list of synced file types
+  ansible.builtin.template:
+    src: stignore.j2
+    dest: "{{ shared_dir }}/.stignore"
+    mode: "0644"
+
+- name: Create the Syncthing configuration and keys
+  ansible.builtin.command: >-
+    {{ syncthing_dir }}/{{ syncthing_name }}/syncthing generate
+    --home={{ client_home }} --no-default-folder
+  args:
+    creates: "{{ client_home }}/config.xml"
+
+- name: Copy the folder icon
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../icon/folder-icon.png"
+    dest: "{{ client_home }}/folder-icon.png"
+    mode: "0644"
+  register: icon_file
+  tags: [icon]
+
+# Finder keeps a folder's icon in a hidden file "Icon\r" in the folder, which
+# Syncthing ignores, since it's not one of the synced file types
+- name: Check the folder icon
+  ansible.builtin.find:
+    paths: "{{ shared_dir }}"
+    # "?" matches the "\r" at the end of the file name
+    patterns: Icon?
+    hidden: true
+  register: icon_in_folder
+  tags: [icon]
+
+- name: Set the folder icon
+  ansible.builtin.command:
+    argv:
+      - osascript
+      - -l
+      - JavaScript
+      - -e
+      - >-
+        ObjC.import("AppKit");
+        var icon = $.NSImage.alloc.initWithContentsOfFile("{{ icon_file.dest }}");
+        $.NSWorkspace.sharedWorkspace.setIconForFileOptions(icon, "{{ shared_dir }}", 0)
+  when: icon_file.changed or icon_in_folder.matched == 0
+  tags: [icon]
+
+- name: Create the folder for user agents
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/Library/LaunchAgents"
+    state: directory
+    mode: "0755"
+
+- name: Install the user agent
+  ansible.builtin.template:
+    src: geteilter-ordner.plist.j2
+    dest: "{{ ansible_env.HOME }}/Library/LaunchAgents/{{ launch_agent }}.plist"
+    mode: "0644"
+  register: agent_file
+
+- name: Check whether the user agent is running
+  ansible.builtin.command: launchctl print gui/{{ ansible_facts.user_uid }}/{{ launch_agent }}
+  register: agent_status
+  changed_when: false
+  failed_when: false
+
+- name: Stop the old user agent
+  ansible.builtin.command: launchctl bootout gui/{{ ansible_facts.user_uid }}/{{ launch_agent }}
+  when: agent_file.changed and agent_status.rc == 0
+
+# needs the user to be logged in to the desktop; otherwise it starts at the next login
+- name: Start the user agent
+  ansible.builtin.command: >-
+    launchctl bootstrap gui/{{ ansible_facts.user_uid }}
+    {{ ansible_env.HOME }}/Library/LaunchAgents/{{ launch_agent }}.plist
+  when: agent_file.changed or agent_status.rc != 0 or agent_stopped_for_move | default(false)

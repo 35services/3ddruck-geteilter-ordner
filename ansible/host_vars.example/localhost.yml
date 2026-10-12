@@ -1,0 +1,15 @@
+---
+# Example: a Mac as the hub, with Docker Desktop. Copy to host_vars/localhost.yml.
+
+# docker-compose.yml is used right from this repository
+hub_compose_dir: "{{ playbook_dir }}/.."
+hub_shared_dir: "{{ lookup('env', 'HOME') }}/Desktop/{{ geteilter_ordner_label }}"
+# optional: an existing signal-cli login on the Mac, otherwise signal/state
+hub_signal_state_dir: "{{ lookup('env', 'HOME') }}/.local/share/signal-cli"
+
+# where the clients find this hub: its local name and its Tailscale name
+hub_addresses:
+  - tcp://My-Mac.local:22000
+  - quic://My-Mac.local:22000
+  - tcp://my-mac.example.ts.net:22000
+  - quic://my-mac.example.ts.net:22000

@@ -1,0 +1,12 @@
+# site-specific: your machines, paths and addresses, see the *.example files
+ansible/inventory.ini
+ansible/host_vars/
+
+# the notifier's Signal account and the paths for docker compose
+signal/
+.env
+
+.DS_Store
+
+# notes about this site's machines, like the prepared hub
+SITE.md
