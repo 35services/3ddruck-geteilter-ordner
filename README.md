@@ -96,6 +96,13 @@ or `~/Desktop/…`) with the folder icon, starts the user service `geteilter-ord
 On a Linux client: `systemctl --user status geteilter-ordner` and
 `journalctl --user -u geteilter-ordner`.
 
+**Linux without systemd** (sysvinit, e.g. MX Linux) has no user services: there,
+`/etc/init.d/geteilter-ordner` runs Syncthing as the user from boot
+(`sudo service geteilter-ordner status`), and the folder icon is set through a
+temporary session bus (`dbus-run-session`). It still needs `--ask-become-pass` or
+the password in the inventory, also for `--skip-tags install`, since the start
+script is a system service.
+
 **Macs** (`[macs]` in the inventory, `ansible/client-darwin.yml`) need no admin
 rights and no Homebrew:
 

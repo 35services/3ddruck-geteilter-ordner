@@ -1,6 +1,8 @@
 ---
 # Linux part of clients.yml: Syncthing from the distribution, a systemd user
 # service, and the folder on the desktop with its icon set through GIO.
+# Systems with sysvinit instead of systemd (e.g. MX Linux) get a start script in
+# /etc/init.d that runs Syncthing as the user from boot.
 
 - name: Install Syncthing
   become: true
@@ -16,6 +18,7 @@
   ansible.builtin.command: loginctl enable-linger {{ ansible_user }}
   args:
     creates: /var/lib/systemd/linger/{{ ansible_user }}
+  when: ansible_facts.service_mgr == 'systemd'
   tags: [install]
 
 # the folder name depends on the language, e.g. "Desktop" or "Schreibtisch"
@@ -55,40 +58,72 @@
   tags: [icon]
 
 # GNOME's file manager and desktop show this icon for the folder. It's
-# metadata of the file manager, so Syncthing doesn't sync it.
+# metadata of the file manager, so Syncthing doesn't sync it. GIO needs a
+# session bus: systemd provides one per user, without systemd a temporary one
+# is started (dbus-run-session), whose metadata service writes the same file.
+- name: Find the session bus for GIO
+  ansible.builtin.set_fact:
+    gio_environment: >-
+      {{ user_environment | combine({'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/' ~ ansible_facts.user_uid ~ '/bus'})
+         if ansible_facts.service_mgr == 'systemd' else {} }}
+    gio_command: "{{ 'gio' if ansible_facts.service_mgr == 'systemd' else 'dbus-run-session -- gio' }}"
+  tags: [icon]
+
 - name: Check the folder icon
-  environment: "{{ user_environment | combine({'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/' ~ ansible_facts.user_uid ~ '/bus'}) }}"
-  ansible.builtin.command: gio info -a metadata::custom-icon "{{ shared_dir }}"
+  environment: "{{ gio_environment }}"
+  ansible.builtin.command: >-
+    {{ gio_command }} info -a metadata::custom-icon "{{ shared_dir }}"
   register: folder_icon
   changed_when: false
   tags: [icon]
 
 - name: Set the folder icon
-  environment: "{{ user_environment | combine({'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/' ~ ansible_facts.user_uid ~ '/bus'}) }}"
+  environment: "{{ gio_environment }}"
   ansible.builtin.command: >-
-    gio set "{{ shared_dir }}"
+    {{ gio_command }} set "{{ shared_dir }}"
     metadata::custom-icon "file://{{ client_home }}/folder-icon.png"
   when: ("file://" ~ client_home ~ "/folder-icon.png") not in folder_icon.stdout
   tags: [icon]
 
-- name: Create the folder for user services
-  ansible.builtin.file:
-    path: "{{ ansible_env.HOME }}/.config/systemd/user"
-    state: directory
-    mode: "0755"
+- name: Run Syncthing as a systemd user service
+  when: ansible_facts.service_mgr == 'systemd'
+  block:
+    - name: Create the folder for user services
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.config/systemd/user"
+        state: directory
+        mode: "0755"
 
-- name: Install the user service
-  ansible.builtin.template:
-    src: geteilter-ordner.service.j2
-    dest: "{{ ansible_env.HOME }}/.config/systemd/user/geteilter-ordner.service"
-    mode: "0644"
-  register: service_file
+    - name: Install the user service
+      ansible.builtin.template:
+        src: geteilter-ordner.service.j2
+        dest: "{{ ansible_env.HOME }}/.config/systemd/user/geteilter-ordner.service"
+        mode: "0644"
+      register: service_file
 
-- name: Start the user service
-  environment: "{{ user_environment }}"
-  ansible.builtin.systemd_service:
-    name: geteilter-ordner
-    scope: user
-    enabled: true
-    state: "{{ 'restarted' if service_file.changed else 'started' }}"
-    daemon_reload: "{{ service_file.changed }}"
+    - name: Start the user service
+      environment: "{{ user_environment }}"
+      ansible.builtin.systemd_service:
+        name: geteilter-ordner
+        scope: user
+        enabled: true
+        state: "{{ 'restarted' if service_file.changed else 'started' }}"
+        daemon_reload: "{{ service_file.changed }}"
+
+# sysvinit has no user services, so a system service runs it as the user
+- name: Run Syncthing from a sysvinit start script
+  when: ansible_facts.service_mgr == 'sysvinit'
+  become: true
+  block:
+    - name: Install the start script
+      ansible.builtin.template:
+        src: geteilter-ordner.init.j2
+        dest: /etc/init.d/geteilter-ordner
+        mode: "0755"
+      register: init_script
+
+    - name: Start it now and on boot
+      ansible.builtin.service:
+        name: geteilter-ordner
+        enabled: true
+        state: "{{ 'restarted' if init_script.changed else 'started' }}"
