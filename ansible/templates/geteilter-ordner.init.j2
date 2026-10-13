@@ -1,0 +1,47 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          geteilter-ordner
+# Required-Start:    $network $remote_fs $syslog
+# Required-Stop:     $network $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Geteilter Ordner (Syncthing)
+### END INIT INFO
+
+# Managed by Ansible (geteilter-ordner). For systems with sysvinit instead of
+# systemd (e.g. MX Linux): runs the Geteilter Ordner's Syncthing as {{ ansible_user }}
+# from boot, like the systemd user service with lingering does.
+
+USER={{ ansible_user }}
+HOME_DIR={{ ansible_env.HOME }}
+DAEMON=/usr/bin/syncthing
+PIDFILE=/run/geteilter-ordner.pid
+
+. /lib/lsb/init-functions
+
+case "$1" in
+  start)
+    log_daemon_msg "Starting Geteilter Ordner" syncthing
+    start-stop-daemon --start --quiet --oknodo --background --make-pidfile --pidfile "$PIDFILE" \
+      --chuid "$USER" --chdir "$HOME_DIR" --exec "$DAEMON" -- \
+      serve --no-browser --no-upgrade --home={{ client_home }} --gui-address={{ client_gui_address }}
+    log_end_msg $?
+    ;;
+  stop)
+    log_daemon_msg "Stopping Geteilter Ordner" syncthing
+    # --oknodo: not running counts as stopped, so restarting also works the first time
+    start-stop-daemon --stop --quiet --oknodo --pidfile "$PIDFILE" --retry 10 --remove-pidfile
+    log_end_msg $?
+    ;;
+  restart|force-reload)
+    "$0" stop
+    "$0" start
+    ;;
+  status)
+    status_of_proc -p "$PIDFILE" "$DAEMON" geteilter-ordner
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|force-reload|status}" >&2
+    exit 3
+    ;;
+esac
