@@ -103,6 +103,18 @@ temporary session bus (`dbus-run-session`). It still needs `--ask-become-pass` o
 the password in the inventory, also for `--skip-tags install`, since the start
 script is a system service.
 
+**Xfce** (e.g. MX Linux) ignores GNOME's folder icon, and its desktop can't show
+a folder's own icon at all. There the folder goes into the home folder
+(`~/Geteilter Ordner`), and the desktop gets a launcher with the icon instead
+(`geteilter-ordner.desktop`, executable and marked as trusted, so Xfce doesn't
+ask before opening it). Thunar shows the icon for the folder itself through a
+folder thumbnail: the icon is copied into the folder as `.folder.jpg`, which a
+thumbnailer for folders turns into its picture (MX Linux has one,
+`/usr/share/thumbnailers/folder.thumbnailer`; Syncthing ignores the file). A
+bookmark puts the folder into Thunar's side panel and the open and save
+dialogs. A folder set up on the desktop before is moved while Syncthing is
+stopped, so the move doesn't look like deleted files.
+
 **Macs** (`[macs]` in the inventory, `ansible/client-darwin.yml`) need no admin
 rights and no Homebrew:
 

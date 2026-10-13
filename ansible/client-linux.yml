@@ -28,12 +28,62 @@
   changed_when: false
   tags: [always]
 
-- name: Use a folder on the desktop
-  ansible.builtin.set_fact:
-    shared_dir: "{{ desktop_dir.stdout }}/{{ geteilter_ordner_label }}"
+# Xfce's desktop can't show a folder's own icon, so there the folder goes into
+# the home folder, and a launcher with the icon goes on the desktop instead
+- name: Check for Xfce's desktop
+  ansible.builtin.stat:
+    path: /usr/bin/xfdesktop
+  register: xfdesktop
   tags: [always]
 
-- name: Create the shared folder on the desktop
+- name: Use a folder on the desktop, or in the home folder on Xfce
+  ansible.builtin.set_fact:
+    shared_dir: >-
+      {{ (ansible_env.HOME if xfdesktop.stat.exists else desktop_dir.stdout) ~ '/' ~ geteilter_ordner_label }}
+    xfce: "{{ xfdesktop.stat.exists }}"
+  tags: [always]
+
+# A folder set up before this moved off the desktop. Syncthing must not run
+# while it moves, or it would take the missing files for deleted ones and
+# delete them everywhere. Started with the old path, it finds no folder marker
+# (.stfolder) there and pauses the folder until the new path is set below.
+- name: Check for the folder on the desktop
+  ansible.builtin.stat:
+    path: "{{ desktop_dir.stdout }}/{{ geteilter_ordner_label }}/.stfolder"
+  register: old_desktop_folder
+  when: xfce
+
+- name: Check for the folder in the home folder
+  ansible.builtin.stat:
+    path: "{{ shared_dir }}"
+  register: new_home_folder
+  when: xfce
+
+- name: Move the folder from the desktop to the home folder
+  when:
+    - xfce
+    - old_desktop_folder.stat.exists
+    - not new_home_folder.stat.exists
+  block:
+    - name: Stop Syncthing (sysvinit)
+      become: true
+      ansible.builtin.service:
+        name: geteilter-ordner
+        state: stopped
+      when: ansible_facts.service_mgr == 'sysvinit'
+
+    - name: Stop Syncthing (systemd user service)
+      environment: "{{ user_environment }}"
+      ansible.builtin.systemd_service:
+        name: geteilter-ordner
+        scope: user
+        state: stopped
+      when: ansible_facts.service_mgr == 'systemd'
+
+    - name: Move the folder
+      ansible.builtin.command: mv "{{ desktop_dir.stdout }}/{{ geteilter_ordner_label }}" "{{ shared_dir }}"
+
+- name: Create the shared folder
   ansible.builtin.file:
     path: "{{ shared_dir }}"
     state: directory
@@ -84,6 +134,70 @@
     metadata::custom-icon "file://{{ client_home }}/folder-icon.png"
   when: ("file://" ~ client_home ~ "/folder-icon.png") not in folder_icon.stdout
   tags: [icon]
+
+- name: Show the folder and its icon on Xfce
+  when: xfce
+  tags: [icon]
+  block:
+    # Thunar shows a folder thumbnail from a picture inside the folder, if a
+    # thumbnailer for folders is installed (MX Linux has one, folder-thumbnailer).
+    # It's a PNG, the name is what the thumbnailer looks for. Syncthing ignores it.
+    - name: Put the icon into the folder for Thunar
+      ansible.builtin.copy:
+        src: "{{ client_home }}/folder-icon.png"
+        dest: "{{ shared_dir }}/.folder.jpg"
+        remote_src: true
+        mode: "0644"
+
+    - name: Put a launcher for the folder on the desktop
+      ansible.builtin.copy:
+        dest: "{{ desktop_dir.stdout }}/geteilter-ordner.desktop"
+        content: |
+          [Desktop Entry]
+          Type=Application
+          Name={{ geteilter_ordner_label }}
+          Comment=3D-Druck-Dateien, die alle Computer der AG teilen
+          Icon={{ client_home }}/folder-icon.png
+          Exec=thunar "{{ shared_dir }}"
+          Terminal=false
+        # Xfce only starts launchers on the desktop that are executable
+        mode: "0755"
+
+    # Xfce asks before starting a launcher on the desktop, unless its checksum is
+    # stored as trusted. It's stored by GIO, through the desktop session if one
+    # runs, so the desktop sees it right away
+    - name: Mark the launcher as trusted
+      ansible.builtin.shell: |
+        launcher="{{ desktop_dir.stdout }}/geteilter-ordner.desktop"
+        checksum=$(sha256sum "$launcher" | cut -d ' ' -f 1)
+        pid=$(pgrep -u "$(id -u)" -x xfce4-panel | head -n 1)
+        if [ -n "$pid" ]; then
+          export $(tr '\0' '\n' < /proc/$pid/environ | grep -E '^DBUS_SESSION_BUS_ADDRESS=')
+          gio_command=gio
+        else
+          gio_command="dbus-run-session -- gio"
+        fi
+        if $gio_command info -a metadata::xfce-exe-checksum "$launcher" | grep -q "$checksum"; then
+          exit 0
+        fi
+        $gio_command set -t string "$launcher" metadata::xfce-exe-checksum "$checksum"
+        echo changed
+      register: launcher_trust
+      changed_when: "'changed' in launcher_trust.stdout"
+
+    # in Thunar's side panel and in the open and save dialogs
+    - name: Create the folder for GTK's bookmarks
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.config/gtk-3.0"
+        state: directory
+        mode: "0755"
+
+    - name: Add the folder to the bookmarks
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_env.HOME }}/.config/gtk-3.0/bookmarks"
+        line: "file://{{ shared_dir | urlencode }} {{ geteilter_ordner_label }}"
+        create: true
+        mode: "0644"
 
 - name: Run Syncthing as a systemd user service
   when: ansible_facts.service_mgr == 'systemd'
