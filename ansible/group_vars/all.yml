@@ -11,6 +11,13 @@ geteilter_ordner_file_types:
   - txt
   - svg
 
+# A second folder inside the shared folder, for files from the Menti, e.g. videos:
+# only the hub sends (its type is "send only"), the clients only receive. It syncs
+# all file types, except the operating systems' own files. The shared folder
+# ignores it, so its files aren't synced twice.
+geteilter_ordner_menti_id: geteilter-ordner-menti
+geteilter_ordner_menti_label: Von der Menti
+
 # seconds between a change and sending it
 geteilter_ordner_watch_delay: 5
 

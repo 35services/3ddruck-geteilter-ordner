@@ -149,3 +149,54 @@
         body: "{{ {'devices': hub_folder.json.devices + [{'deviceID': client_status.json.myID}]} }}"
       when: client_status.json.myID not in (hub_folder.json.devices | map(attribute='deviceID'))
       changed_when: true
+
+    # The Menti's folder inside the shared folder: the client only receives
+    # ("receive only"). Files the kids add or change there stay on their machine
+    # and aren't sent.
+    - name: Create the Menti's folder
+      ansible.builtin.file:
+        path: "{{ shared_dir }}/{{ geteilter_ordner_menti_label }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write the Menti's folder's ignored files
+      ansible.builtin.template:
+        src: stignore-menti.j2
+        dest: "{{ shared_dir }}/{{ geteilter_ordner_menti_label }}/.stignore"
+        mode: "0644"
+
+    - name: Add the Menti's folder to the client
+      ansible.builtin.uri:
+        url: "{{ client_api }}/rest/config/folders/{{ geteilter_ordner_menti_id }}"
+        method: PUT
+        headers: "{{ client_api_headers }}"
+        body_format: json
+        body: >-
+          {{ {
+            'id': geteilter_ordner_menti_id,
+            'label': geteilter_ordner_menti_label,
+            'path': shared_dir ~ '/' ~ geteilter_ordner_menti_label,
+            'type': 'receiveonly',
+            'fsWatcherEnabled': true,
+            'fsWatcherDelayS': geteilter_ordner_watch_delay | int,
+            'rescanIntervalS': 60,
+            'devices': [{'deviceID': client_status.json.myID}, {'deviceID': hub_status.json.myID}]
+          } }}
+
+    - name: Read the hub's Menti folder
+      delegate_to: "{{ groups['hub'][0] }}"
+      ansible.builtin.uri:
+        url: "{{ geteilter_ordner_hub_api }}/rest/config/folders/{{ geteilter_ordner_menti_id }}"
+        headers: "{{ hub_api_headers }}"
+      register: hub_menti_folder
+
+    - name: Share the Menti's folder with the client on the hub
+      delegate_to: "{{ groups['hub'][0] }}"
+      ansible.builtin.uri:
+        url: "{{ geteilter_ordner_hub_api }}/rest/config/folders/{{ geteilter_ordner_menti_id }}"
+        method: PATCH
+        headers: "{{ hub_api_headers }}"
+        body_format: json
+        body: "{{ {'devices': hub_menti_folder.json.devices + [{'deviceID': client_status.json.myID}]} }}"
+      when: client_status.json.myID not in (hub_menti_folder.json.devices | map(attribute='deviceID'))
+      changed_when: true
