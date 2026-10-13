@@ -272,7 +272,9 @@
       when: menti_folder.status == 404
       changed_when: true
 
-    # "send only": the hub ignores changes from the clients, which only receive
+    # "send only": the hub ignores changes from the clients, which only receive.
+    # The path follows the label, so renaming means: pause the folder, move it,
+    # then run this.
     - name: Configure the Menti's folder
       ansible.builtin.uri:
         url: "{{ geteilter_ordner_hub_api }}/rest/config/folders/{{ geteilter_ordner_menti_id }}"
@@ -282,6 +284,8 @@
         body: >-
           {{ {
             'label': geteilter_ordner_menti_label,
+            'path': folder_path ~ '/' ~ geteilter_ordner_menti_label,
+            'paused': false,
             'type': 'sendonly',
             'fsWatcherEnabled': true,
             'fsWatcherDelayS': geteilter_ordner_watch_delay | int,

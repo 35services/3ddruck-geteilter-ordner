@@ -3,7 +3,7 @@
 A folder called "Geteilter Ordner" on the desktop of every machine of the 3D-Druck-AG,
 kept in sync with [Syncthing](https://syncthing.net/). Only `.3mf`, `.stl`, `.txt`
 and `.svg` files are synced, about 5 seconds after a change. A Signal message
-reports which files changed. Inside it, the folder "Von der Menti" brings any
+reports which files changed. Inside it, the folder "Menti" brings any
 other files, e.g. videos, from the Menti to every machine, see
 [The Menti's folder](#the-mentis-folder).
 
@@ -158,18 +158,18 @@ noticed at the next rescan, within a minute, not right away.
 
 ## The Menti's folder
 
-"Von der Menti", inside the Geteilter Ordner, is for files only the Menti hands
+"Menti", inside the Geteilter Ordner, is for files only the Menti hands
 out, of any type, e.g. videos (`.mp4`) or PDFs. It's a Syncthing folder of its own:
 
 - On the hub it's **send only**: the Menti puts files into
-  `Geteilter Ordner/Von der Menti` on the Mac, and every client gets them.
+  `Geteilter Ordner/Menti` on the Mac, and every client gets them.
 - On the clients it's **receive only**: files the kids add, change or delete there
   stay on their machine and aren't sent. Syncthing lists them as local changes;
   "Revert Local Changes" in a client's web interface (`127.0.0.1:8385`) restores
   the Menti's version.
 - It syncs all files except the operating systems' own (`.DS_Store`, `Icon\r`,
   `Thumbs.db`, …, `templates/stignore-menti.j2`). The Geteilter Ordner itself
-  ignores it (`/Von der Menti` in its `.stignore`), so nothing is synced twice.
+  ignores it (`/Menti` in its `.stignore`), so nothing is synced twice.
 - The Signal notifications only cover the Geteilter Ordner, not this folder.
 - Everything in it lands on every machine: large videos fill up the sticks
   (around 17 GB free on a 32 GB stick).

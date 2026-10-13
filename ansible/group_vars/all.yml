@@ -16,7 +16,7 @@ geteilter_ordner_file_types:
 # all file types, except the operating systems' own files. The shared folder
 # ignores it, so its files aren't synced twice.
 geteilter_ordner_menti_id: geteilter-ordner-menti
-geteilter_ordner_menti_label: Von der Menti
+geteilter_ordner_menti_label: Menti
 
 # seconds between a change and sending it
 geteilter_ordner_watch_delay: 5
